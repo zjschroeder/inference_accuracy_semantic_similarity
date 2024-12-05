@@ -1,0 +1,220 @@
+---
+title: "Simulated Data"
+output: html_document
+date: "2024-12-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(purrr)
+```
+
+# Overview
+
+This file simulates the data I anticipate for the coordinated analysis that will be my dissertation.
+
+```{r Metadata}
+metadata <- tibble(
+  study = c("new_moms", "deception_detection", "karyn_diss", "murat_rep", 
+             "mideast_men", "stem", "barter", "double_empathy"),
+  targets = c(20, 95, 212, 200, 
+              9, 59, 310, 8),
+  perceivers = c(60, 95, 212, 200,
+                 326, 121, 310, 100),
+  videos = c(20, 95, 318, 300,
+             9, 121, 155, 8),
+  paradigm = c("ss", "di", "di", "di",
+               "ss", "di", "di", "ss") %>% 
+    factor(levels = c("ss", "di"), labels = c("Standard Stimulus", 
+           "Dyadic Interaction")),
+  inference_schedule = c("Variable", "Variable", "Set", "Set",
+                         "Variable", "Set", "Variable", "Set") %>% 
+    as.factor()
+) 
+vrm <- c("Disclosure", "Edification", "Advisement", "Confirmation", "Question", "Acknowledgment", "Interpretation", "Reflection")
+```
+
+```{r SimulateStudy SubFunctions}
+generate_random_number <- function(mean = 8, sd = 3, min = 3, max = 19, digits = 0) {
+  random_number <- NA
+  while (is.na(random_number) || random_number < min || random_number > max) {
+    random_number <- round(rnorm(1, mean = mean, sd = sd), digits)
+  }
+  return(random_number)
+}
+
+multiply_out <- function(df, n_column, column_name) {
+  df_expanded <- df %>%
+    rowwise() %>%
+    mutate(!!column_name := list(seq_len(!!sym(n_column)))) %>%
+    unnest(cols = !!sym(column_name))
+  
+  return(df_expanded)
+}
+```
+
+```{r SimulateStudy Function, warning=FALSE}
+SimulateStudy <- function(study_name, paradigm, seed = 123, n_perceivers = 1, n_videos_per_perceiver = 1){
+  set.seed(seed)
+  # Filter for current study
+  study_data <- metadata %>% 
+    filter(study == study_name) 
+
+  # Simulate number of chapters within each video
+  df = tibble(
+    name = paste0(study_name, "_", 1:study_data$videos),
+    n_video = 1:study_data$videos,
+    n_chapter = NA
+  )
+  for(i in seq_len(study_data$videos)){
+    df$n_chapter[i] <- generate_random_number()
+  }
+  df <- multiply_out(df, n_column = "n_chapter", column_name = "chapter")
+ 
+   # Simulate number of turns within each chapter
+  for(i in seq_len(study_data$videos)){
+    df$n_turns[i] <- generate_random_number(mean = 11, sd = 6, 
+                                           min = 4, max = 40)
+  }
+  df <- multiply_out(df, n_column = "n_turns", column_name = "turn")
+  
+  # STIMULUS LEVEL VARIABLES
+  df <- df %>% 
+    group_by(name, chapter) %>% 
+    mutate(
+      chapter_length = generate_random_number(mean = 45, sd = 6, 
+                                              min = 18, max = 120,
+                                              digits = 3),
+      turn_length = {raw_turn_lengths <- runif(n(), min = 4, max = 40)
+                     scaled_turn_lengths <- raw_turn_lengths / sum(raw_turn_lengths) *
+                      chapter_length
+                     round(scaled_turn_lengths, 3)
+                    },
+      start_time = cumsum(lag(turn_length, default = 0)),
+      end_time = cumsum(turn_length),
+      turns_from_inference = n() - row_number() + 1,
+      turn_percent_through_chapter = (row_number() / n()) * 100,
+      time_percent_through_chapter = end_time/chapter_length * 100,
+      speaker = ifelse(rep(sample(c(TRUE, FALSE), 1), n()), 
+                         rep(c("Partner", "Target"), length.out = n()), 
+                         rep(c("Target", "Partner"), length.out = n())) %>% 
+        factor(),
+      sem_sim = {
+        # Base random number in range -1 to 1
+        base_random <- runif(n(), min = -1.00, max = 1.00)
+        # Adjust variability using a quadratic function of turn_percent_through_chapter
+        weight <- ((turn_percent_through_chapter-1) / 100)^2  # Quadratic scaling
+        # Combine with base_random and ensure values are bounded between -1 and 1
+        sem_sim_raw <- base_random * (1 - weight) + 1 * weight
+        pmin(pmax(sem_sim_raw, -1.00), 1.00)
+      },
+      cog_processing_language = (sem_sim + 2 + runif(n(), min = -0.8, max = 0.8)) * 5,
+      memory_language = (sem_sim + 2 + runif(n(), min = -0.8, max = 0.8)) * 5,
+      emo_anxious_language = (sem_sim + 2 + runif(n(), min = -0.8, max = 0.8)) * 5,
+      emo_sad_language = (sem_sim + 2 + runif(n(), min = -0.8, max = 0.8)) * 5,
+      emo_anger_language = (sem_sim + 2 + runif(n(), min = -0.8, max = 0.8)) * 5,
+      certain_language = (sem_sim + 2 + runif(n(), min = -0.8, max = 0.8)) * 5,
+      self_ref_language = (sem_sim + 2 + runif(n(), min = -0.8, max = 0.8)) * 5,
+      curious_language = (sem_sim + 2 + runif(n(), min = -0.8, max = 0.8)) * 5,
+      vrm = sample(vrm, n(), replace = TRUE)
+    )
+ 
+  
+   # PARTICIPANT-LEVEL VARIABLES
+  if(paradigm == "DI"){
+    df <- df %>% 
+      mutate(
+        target = paste0(name, "_target_", n_video),
+        perceiver = paste0(name, "_perceiver_", n_video),
+        partner = paste0(name, "_partner_", n_video),
+        paradigm = "Dyadic Interaction"
+      )
+  } else if (paradigm == "SS"){
+    # have to double-up on the naming because nesting removes the grouping column
+    df <- df %>% 
+      mutate(
+        name2 = name
+      )
+    df_list <- df %>% 
+      group_by(name) %>% 
+      nest() 
+
+    out_list <- list()
+    
+    for(i in seq_len(n_perceivers)){
+      df_i <- sample(df_list$data, n_videos_per_perceiver) %>% 
+          bind_rows()
+      df_i <- df_i %>% 
+        mutate(
+          target = paste0(name2, "_target_", n_video),
+          perceiver = paste0(name2, "_perceiver_", i),
+          partner = paste0(name2, "_partner_", n_video),
+          paradigm = "Standard Stimulus"
+      )
+      out_list[[i]] <- df_i
+    }
+    df <- bind_rows(out_list)
+    df$name <- df$name2
+    df <- df %>% 
+      select(-name2)
+  }
+  return(df)
+}
+```
+
+```{r Simulate Data, cache = TRUE}
+df <- list(
+           stem = SimulateStudy("stem", paradigm = "DI"),
+           barter = SimulateStudy("barter", paradigm = "DI"),
+           deception_detection = SimulateStudy("deception_detection", paradigm = "DI"),
+           new_moms = SimulateStudy("new_moms", 
+                                    paradigm = "SS", 
+                                    n_perceivers = 3, 
+                                    n_videos_per_perceiver = 3),
+           karyn_diss = SimulateStudy("karyn_diss", 
+                                      paradigm = "SS", 
+                                      n_perceivers = 212, 
+                                      n_videos_per_perceiver = 3),
+           murat_rep = SimulateStudy("karyn_diss", 
+                                     paradigm = "SS", 
+                                     n_perceivers = 200, 
+                                     n_videos_per_perceiver = 3),
+           mideast_men = SimulateStudy("mideast_men", 
+                                       paradigm = "SS",
+                                       n_perceivers = 326, 
+                                       n_videos_per_perceiver = 4),
+           double_empathy = SimulateStudy("double_empathy", 
+                                          paradigm = "SS",
+                                          n_perceivers = 100, 
+                                          n_videos_per_perceiver = 4)
+          ) %>% 
+  bind_rows() %>% 
+  ungroup()
+
+df <- df %>% 
+  mutate(across(where(is.character), factor))
+```
+
+# Basic Visualizations
+
+```{r}
+avg_data <- df %>%
+  group_by(turns_from_inference) %>%
+  summarize(sem_sim = mean(sem_sim), .groups = "drop")
+
+ggplot(df, aes(x = turns_from_inference, y = sem_sim)) +
+  # Individual perceiver lines
+  # geom_line(aes(group = perceiver), alpha = 0.8) +
+  # Average line
+  geom_line(data = avg_data, aes(group = 1), color = "black", size = 1.2) +
+  # Labels and theme
+  labs(
+    title = "Turn Distance from Inference by Semantic Similarity",
+    x = "Turns from Inference",
+    y = "Semantic Similarity",
+    color = "Perceiver"
+  ) +
+  theme_minimal()
+```
+
