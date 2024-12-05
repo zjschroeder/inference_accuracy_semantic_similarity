@@ -6,8 +6,15 @@ date: "2024-12-04"
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-library(tidyverse)
+
 library(purrr)
+library(papaja)
+library(reshape2)
+library(MASS)
+library(kableExtra)
+library(faux)
+library(psych)
+library(tidyverse)
 ```
 
 # Overview
@@ -98,27 +105,27 @@ SimulateStudy <- function(study_name, paradigm, seed = 123, n_perceivers = 1, n_
       time_percent_through_chapter = end_time/chapter_length * 100,
       speaker = ifelse(rep(sample(c(TRUE, FALSE), 1), n()), 
                          rep(c("Partner", "Target"), length.out = n()), 
-                         rep(c("Target", "Partner"), length.out = n())) %>% 
+                         rep(c("Target", "Partner"), length.out = n()))  %>% 
         factor(),
       sem_sim = {
-        # Base random number in range -1 to 1
-        base_random <- runif(n(), min = -1.00, max = 1.00)
-        # Adjust variability using a quadratic function of turn_percent_through_chapter
-        weight <- ((turn_percent_through_chapter-1) / 100)^2  # Quadratic scaling
-        # Combine with base_random and ensure values are bounded between -1 and 1
-        sem_sim_raw <- base_random * (1 - weight) + 1 * weight
+        repeat {
+          base_random <- runif(n(), min = -1.00, max = 1.00)
+          weight <- ifelse(speaker == "Partner",
+                           ((turn_percent_through_chapter - 1) / 180)^2, 
+                           ((turn_percent_through_chapter - 1) / 120)^2) 
+          noise <- ifelse(speaker == "Partner",
+                          rnorm(n(), mean = 0, sd = 0.3),  
+                          rnorm(n(), mean = 0, sd = 0.1))  
+          sem_sim_raw <- base_random * (1 - weight) + 1 * weight + noise
+          if (sum(sem_sim_raw <= -0.99 | sem_sim_raw >= 0.99) / n() < 0.05) {
+            break
+          }
+        }
+       
         pmin(pmax(sem_sim_raw, -1.00), 1.00)
       },
-      cog_processing_language = (sem_sim + 2 + runif(n(), min = -0.8, max = 0.8)) * 5,
-      memory_language = (sem_sim + 2 + runif(n(), min = -0.8, max = 0.8)) * 5,
-      emo_anxious_language = (sem_sim + 2 + runif(n(), min = -0.8, max = 0.8)) * 5,
-      emo_sad_language = (sem_sim + 2 + runif(n(), min = -0.8, max = 0.8)) * 5,
-      emo_anger_language = (sem_sim + 2 + runif(n(), min = -0.8, max = 0.8)) * 5,
-      certain_language = (sem_sim + 2 + runif(n(), min = -0.8, max = 0.8)) * 5,
-      self_ref_language = (sem_sim + 2 + runif(n(), min = -0.8, max = 0.8)) * 5,
-      curious_language = (sem_sim + 2 + runif(n(), min = -0.8, max = 0.8)) * 5,
-      vrm = sample(vrm, n(), replace = TRUE)
-    )
+    vrm = sample(vrm, n(), replace = TRUE)
+  )
  
   
    # PARTICIPANT-LEVEL VARIABLES
@@ -157,13 +164,13 @@ SimulateStudy <- function(study_name, paradigm, seed = 123, n_perceivers = 1, n_
     df <- bind_rows(out_list)
     df$name <- df$name2
     df <- df %>% 
-      select(-name2)
+      dplyr::select(-name2)
   }
   return(df)
 }
 ```
 
-```{r Simulate Data, cache = TRUE}
+```{r Simulate Data, cache = FALSE}
 df <- list(
            stem = SimulateStudy("stem", paradigm = "DI"),
            barter = SimulateStudy("barter", paradigm = "DI"),
@@ -196,25 +203,218 @@ df <- df %>%
   mutate(across(where(is.character), factor))
 ```
 
-# Basic Visualizations
+```{r Correlated Variables}
+set.seed(123)
+language_mat <- c(
+                   1.00,  0.50,  0.60, 0.40,  0.45,  0.55, -0.20, -0.25, -0.15,  0.30,
+                   0.50,  1.00,  0.45, 0.35,  0.30,  0.40, -0.10, -0.15, -0.05,  0.25,
+                   0.60,  0.45,  1.00, 0.50,  0.40,  0.35, -0.25, -0.20, -0.10,  0.35,
+                   0.40,  0.35,  0.50, 1.00,  0.25,  0.30,  0.10,  0.15,  0.20,  0.10,
+                   0.45,  0.30,  0.40, 0.25,  1.00,  0.50, -0.15, -0.10, -0.05,  0.40,
+                   0.55,  0.40,  0.35, 0.30,  0.50,  1.00, -0.20, -0.15, -0.10,  0.30,
+                  -0.20, -0.10, -0.25, 0.10, -0.15, -0.20,  1.00,  0.60,  0.50, -0.30,
+                  -0.25, -0.15, -0.20, 0.15, -0.10, -0.15,  0.60,  1.00,  0.50, -0.40,
+                  -0.15, -0.05, -0.10, 0.20, -0.05, -0.10,  0.50,  0.50,  1.00, -0.35,
+                   0.30,  0.25,  0.35, 0.10,  0.40,  0.30, -0.30, -0.40, -0.35,  1.00)
+language_noise <- rnorm(length(language_mat), mean = -.03, sd = .01)
+language_mat <- language_mat + language_noise
+# Independent matrix
+language_vecs <- rnorm_multi(n = nrow(df),
+                             mu = c(cog_processing_language = 4,
+                                    memory_language = 2,
+                                    certain_language = 2,
+                                    self_ref_language = 10,
+                                    curious_language = 1,
+                                    perception_language = 2,
+                                    emo_anxious = 1,
+                                    emo_sad = 2,
+                                    emo_anger = 0.5,
+                                    emo_positive = 1.5),
+                             sd = c(3, 4, 4, 2, 10, 
+                                    10, 15, 15, 15, 4),
+                             r =  language_mat
+)
 
-```{r}
+df$cog_processing_language <- rnorm_pre(
+  data.frame(df$sem_sim, language_vecs$cog_processing_language), 
+  mu = 4, 
+  sd = 3, 
+  r = c(0.2, 0.8)  # Replace with the desired correlation
+)
+df$memory_language <- rnorm_pre(
+  data.frame(df$sem_sim, language_vecs$memory_language), 
+  mu = 2, 
+  sd = 4, 
+  r = c(0.10, 0.8)  # Replace with the desired correlation
+)
+df$certain_language <- rnorm_pre(
+  data.frame(df$sem_sim, language_vecs$certain_language), 
+  mu = 2, 
+  sd = 4, 
+  r = c(0.12, 0.8)  # Replace with the desired correlation
+)
+df$self_ref_language <- rnorm_pre(
+  data.frame(df$sem_sim, language_vecs$self_ref_language), 
+  mu = 10, 
+  sd = 2, 
+  r = c(0.51, 0.8)  # Replace with the desired correlation
+)
+df$curious_language <- rnorm_pre(
+  data.frame(df$sem_sim, language_vecs$curious_language), 
+  mu = 1, 
+  sd = 10, 
+  r = c(0.29, 0.8)  # Replace with the desired correlation
+)
+df$perception_language <- rnorm_pre(
+  data.frame(df$sem_sim, language_vecs$perception_language), 
+  mu = 2, 
+  sd = 10, 
+  r = c(0.40, 0.8)  # Replace with the desired correlation
+)
+df$emo_anxious <- rnorm_pre(
+  data.frame(df$sem_sim, language_vecs$emo_anxious), 
+  mu = 1, 
+  sd = 15, 
+  r = c(0.14, 0.8)  # Replace with the desired correlation
+)
+df$emo_sad <- rnorm_pre(
+  data.frame(df$sem_sim, language_vecs$emo_sad), 
+  mu = 2, 
+  sd = 15, 
+  r = c(0.13, 0.8)  # Replace with the desired correlation
+)
+df$emo_anger <- rnorm_pre(
+  data.frame(df$sem_sim, language_vecs$emo_anger), 
+  mu = 0.5, 
+  sd = 15, 
+  r = c(0.19, 0.8)  # Replace with the desired correlation
+)
+df$emo_positive <- rnorm_pre(
+  data.frame(df$sem_sim, language_vecs$emo_positive), 
+  mu = 1.5, 
+  sd = 4, 
+  r = c(0.15, 0.8)  # Replace with the desired correlation
+)
+```
+
+
+# Structural Hypotheses
+
+## Semsim increases closer to chapter end
+
+```{r Average Semsim per Chapter, cache = FALSE}
 avg_data <- df %>%
-  group_by(turns_from_inference) %>%
+  group_by(turn_percent_through_chapter) %>%
   summarize(sem_sim = mean(sem_sim), .groups = "drop")
 
-ggplot(df, aes(x = turns_from_inference, y = sem_sim)) +
-  # Individual perceiver lines
-  # geom_line(aes(group = perceiver), alpha = 0.8) +
-  # Average line
-  geom_line(data = avg_data, aes(group = 1), color = "black", size = 1.2) +
-  # Labels and theme
+ggplot(df, aes(x = (turn_percent_through_chapter), y = sem_sim)) +
+  geom_line(aes(group = perceiver), color = "gray", 
+            alpha = 0.01, size = 0.5) +
+  geom_hline(aes(yintercept = 0), color = "black") +
+  geom_smooth(data = avg_data, aes(x = turn_percent_through_chapter, 
+                                   y = sem_sim),
+              method = "loess", se = FALSE, color = "black") +
   labs(
     title = "Turn Distance from Inference by Semantic Similarity",
-    x = "Turns from Inference",
+    x = "Proximity to Inference",
     y = "Semantic Similarity",
     color = "Perceiver"
   ) +
-  theme_minimal()
+  papaja::theme_apa(
+    base_family = "Times New Roman"
+  )
 ```
 
+## Semsim increases for both Target and Partner as approaches inference *but* increases more for target than partner
+
+```{r, cache = FALSE}
+avg_data <- df %>%
+  group_by(turn_percent_through_chapter, speaker) %>%
+  summarize(sem_sim = mean(sem_sim), .groups = "drop")
+
+ggplot(df, aes(x = turn_percent_through_chapter, y = sem_sim)) +
+  geom_line(aes(group = perceiver, color = speaker), 
+            alpha = 0.005, size = 0.5) +
+  scale_color_manual(
+    values = c("Partner" = "red", "Target" = "blue"),  
+    name = "Speaker"
+  ) +
+  geom_hline(aes(yintercept = 0), color = "black") +
+  # Separate average lines for Target and Partner
+  geom_smooth(data = avg_data %>% filter(speaker == "Target"), 
+              aes(x = turn_percent_through_chapter, y = sem_sim),
+              method = "loess", se = FALSE, color = "red") +
+  geom_smooth(data = avg_data %>% filter(speaker == "Partner"),
+            aes(x = turn_percent_through_chapter, y = sem_sim),
+              method = "loess", se = FALSE, color = "blue") +
+  labs(
+    title = "Turn Distance from Inference by Semantic Similarity",
+    x = "Proximity to Inference",
+    y = "Semantic Similarity",
+    color = "Speaker"
+  ) +
+  papaja::theme_apa(
+    base_family = "Times New Roman"
+  ) +
+  theme(legend.position = "none")
+```
+
+## Linguistic Figures
+
+```{r}
+LanguageFigsFunction <- function(df, variable, var_name = "VARIABLE", subtitle = FALSE, subtitle_text = NA){
+  
+  plot <- ggplot(df, aes(x = sem_sim, y = !!sym(variable))) +
+      geom_point(color = "black", alpha = 0.01, size = 0.5) + 
+      geom_smooth(color = "black", method = "lm", se = TRUE) +
+      theme_apa(base_family = "Times New Roman") +
+      labs(
+        title = paste0("Correlation Between\n ", 
+                       var_name, " and Semantic Similarity"),
+        x = "Semantic Similarity",
+        y = var_name,
+        caption = paste0("Correlation = ",
+                         round(cor(df["sem_sim"], df[variable]), 2))
+  )  
+  if (subtitle) {
+    plot <- plot + labs(subtitle = subtitle_text)
+  }
+  return(plot)
+}
+
+```
+
+```{r}
+LanguageFigsFunction(df, variable = "cog_processing_language", "Cognitive Processing Language",
+                     subtitle = TRUE, subtitle_text = "e.g., know, think, cause")
+LanguageFigsFunction(df, variable = "memory_language", "Memory Language")
+LanguageFigsFunction(df, variable = "certain_language", "Certainty Language")
+LanguageFigsFunction(df, variable = "self_ref_language", "Self-Referential Language")
+LanguageFigsFunction(df, variable = "curious_language", "Curiousity Language")
+LanguageFigsFunction(df, variable = "perception_language", "Perception Language")
+LanguageFigsFunction(df, variable = "emo_anxious", "Anxious Emotion")
+LanguageFigsFunction(df, variable = "emo_sad", "Sad Emotion")
+LanguageFigsFunction(df, variable = "emo_anger", "Anger Emotion")
+LanguageFigsFunction(df, variable = "emo_positive", "Positive Emotions")
+
+
+```
+
+```{r}
+df %>% 
+  select(sem_sim, cog_processing_language, memory_language, 
+         emo_anxious_language, emo_sad_language, emo_anger_language,
+         self_ref_language, curious_language, certain_language) %>% 
+  rename("Semantic Similarity" = sem_sim,
+         'Cognitive Processing' = cog_processing_language, 
+         'Memory' = memory_language, 
+         'Anxious' = emo_anxious_language, 
+         'Sad' = emo_sad_language,
+         'Anger' = emo_anger_language, 
+         'Certainty' = certain_language, 
+         'Self-Referential' = self_ref_language, 
+         'Curiousity' = curious_language) %>% 
+  cor() %>% 
+  kbl(digits = 2) %>% 
+  kable_classic()
+```
