@@ -15,6 +15,8 @@ library(kableExtra)
 library(faux)
 library(psych)
 library(tidyverse)
+library(lme4)
+library(latex2exp)
 ```
 
 # Overview
@@ -240,61 +242,61 @@ df$cog_processing_language <- rnorm_pre(
   mu = 4, 
   sd = 3, 
   r = c(0.2, 0.8)  # Replace with the desired correlation
-)
+) %>% pmax(., 0)
 df$memory_language <- rnorm_pre(
   data.frame(df$sem_sim, language_vecs$memory_language), 
   mu = 2, 
   sd = 4, 
   r = c(0.10, 0.8)  # Replace with the desired correlation
-)
+) %>% pmax(., 0)
 df$certain_language <- rnorm_pre(
   data.frame(df$sem_sim, language_vecs$certain_language), 
   mu = 2, 
   sd = 4, 
   r = c(0.12, 0.8)  # Replace with the desired correlation
-)
+) %>% pmax(., 0)
 df$self_ref_language <- rnorm_pre(
   data.frame(df$sem_sim, language_vecs$self_ref_language), 
   mu = 10, 
   sd = 2, 
   r = c(0.51, 0.8)  # Replace with the desired correlation
-)
+) %>% pmax(., 0)
 df$curious_language <- rnorm_pre(
   data.frame(df$sem_sim, language_vecs$curious_language), 
   mu = 1, 
   sd = 10, 
   r = c(0.29, 0.8)  # Replace with the desired correlation
-)
+) %>% pmax(., 0)
 df$perception_language <- rnorm_pre(
   data.frame(df$sem_sim, language_vecs$perception_language), 
   mu = 2, 
   sd = 10, 
   r = c(0.40, 0.8)  # Replace with the desired correlation
-)
+) %>% pmax(., 0)
 df$emo_anxious <- rnorm_pre(
   data.frame(df$sem_sim, language_vecs$emo_anxious), 
   mu = 1, 
   sd = 15, 
   r = c(0.14, 0.8)  # Replace with the desired correlation
-)
+) %>% pmax(., 0)
 df$emo_sad <- rnorm_pre(
   data.frame(df$sem_sim, language_vecs$emo_sad), 
   mu = 2, 
   sd = 15, 
   r = c(0.13, 0.8)  # Replace with the desired correlation
-)
+) %>% pmax(., 0)
 df$emo_anger <- rnorm_pre(
   data.frame(df$sem_sim, language_vecs$emo_anger), 
   mu = 0.5, 
   sd = 15, 
   r = c(0.19, 0.8)  # Replace with the desired correlation
-)
+) %>% pmax(., 0)
 df$emo_positive <- rnorm_pre(
   data.frame(df$sem_sim, language_vecs$emo_positive), 
   mu = 1.5, 
   sd = 4, 
   r = c(0.15, 0.8)  # Replace with the desired correlation
-)
+) %>% pmax(., 0)
 ```
 
 
@@ -302,7 +304,7 @@ df$emo_positive <- rnorm_pre(
 
 ## Semsim increases closer to chapter end
 
-```{r Average Semsim per Chapter, cache = FALSE}
+```{r Average Semsim per Chapter}
 avg_data <- df %>%
   group_by(turn_percent_through_chapter) %>%
   summarize(sem_sim = mean(sem_sim), .groups = "drop")
@@ -323,6 +325,22 @@ ggplot(df, aes(x = (turn_percent_through_chapter), y = sem_sim)) +
   papaja::theme_apa(
     base_family = "Times New Roman"
   )
+```
+
+```{r}
+# Create explicit grouping factors
+df$target_partner <- interaction(df$target, df$partner, drop = TRUE)
+df$chapter_target_partner <- interaction(df$chapter, df$target_partner, drop = TRUE)
+
+# Fit the multilevel model
+model <- lmer(
+  sem_sim ~ turns_from_inference + paradigm + 
+    (1 | perceiver / target_partner / chapter_target_partner),
+  data = df
+)
+
+# Summarize the model
+summary(model)
 ```
 
 ## Semsim increases for both Target and Partner as approaches inference *but* increases more for target than partner
@@ -401,20 +419,48 @@ LanguageFigsFunction(df, variable = "emo_positive", "Positive Emotions")
 ```
 
 ```{r}
-df %>% 
-  select(sem_sim, cog_processing_language, memory_language, 
-         emo_anxious_language, emo_sad_language, emo_anger_language,
-         self_ref_language, curious_language, certain_language) %>% 
+cormat <- df %>% 
+  select(sem_sim, 
+         cog_processing_language, 
+         memory_language, 
+         certain_language, 
+         self_ref_language, 
+         curious_language,
+         perception_language, 
+         emo_anxious, 
+         emo_sad, 
+         emo_anger, 
+         emo_positive) %>% 
   rename("Semantic Similarity" = sem_sim,
          'Cognitive Processing' = cog_processing_language, 
          'Memory' = memory_language, 
-         'Anxious' = emo_anxious_language, 
-         'Sad' = emo_sad_language,
-         'Anger' = emo_anger_language, 
          'Certainty' = certain_language, 
          'Self-Referential' = self_ref_language, 
-         'Curiousity' = curious_language) %>% 
-  cor() %>% 
-  kbl(digits = 2) %>% 
-  kable_classic()
+         'Curiousity' = curious_language,
+         'Perception'= perception_language,
+         'Anxious' = emo_anxious, 
+         'Sad' = emo_sad,
+         'Anger' = emo_anger, 
+         'Positive Emotions' = emo_positive
+         ) %>% 
+  cor()
+cormat_melt <- melt(cormat)
+
+ggplot(cormat_melt, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +  # Heatmap tiles
+  geom_text(aes(label = format(round(value, 2), nsmall = 2)), color = "black", size = 3) +  # Overlay correlation values
+  scale_fill_gradient2(
+    low = "blue", high = "red", mid = "white", 
+    midpoint = 0, limit = c(-1, 1), space = "Lab",
+    name = "Correlation"
+  ) +
+  labs(
+    title = "Heatmap of Correlations",
+    x = NULL,
+    y = NULL
+  ) +
+  theme_apa() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))  # Rotate x-axis labels
 ```
+
+
