@@ -459,7 +459,7 @@ ggplot(cormat_melt, aes(x = Var1, y = Var2, fill = value)) +
     x = NULL,
     y = NULL
   ) +
-  theme_apa() +
+  theme_apa(base_family = "Times New Roman") +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))  # Rotate x-axis labels
 ```
 
